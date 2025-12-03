@@ -1,84 +1,135 @@
-# azure-pipelines.yml
+# ============================================================
+# Azure DevOps Multi-Stage Terraform Pipeline
+# By: Vidhya Shanker Goel
+# Purpose: Validate → Deploy Dev → Deploy Stage
+# Runs on: Self-hosted Agent (VIDHYASHANKERGO)
+# ============================================================
+
 trigger:
   branches:
     include:
-    - main
-    - feature/*
+      - main
+      - feature/*
   paths:
     include:
-    - terraform/*
+      - lessons/day26/*
+      - azure-pipelines.yml
 
+# ============================================================
+# Global Variables
+# ============================================================
 variables:
-  - group: terraform-secrets
+  azureServiceConnection: 'AzureSPN-Connection'
+  subscriptionId: '2bfadd01-235c-4246-a945-9fea86c83f4d'
+  resourceGroupName: 'terraform-state-rg'
+  containerName: 'tfstate'
 
+# ============================================================
+# Stage 1 : Validate Terraform Configuration
+# ============================================================
 stages:
 - stage: Validate
+  displayName: "Terraform Validate Stage"
   jobs:
   - job: terraform_validate
+    displayName: "Validate Terraform (Dev)"
     pool:
-      vmImage: 'ubuntu-latest'
+      name: mySelfHostedPool
+
     steps:
-    - task: TerraformInstaller@0
+    - checkout: self
+
+    - task: TerraformInstaller@1
+      displayName: "Install Terraform"
       inputs:
-        terraformVersion: '1.5.7'
+        terraformVersion: 'latest'
     
     - task: TerraformTaskV4@4
+      displayName: "Terraform Init (Dev)"
       inputs:
         provider: 'azurerm'
         command: 'init'
-        workingDirectory: '$(System.DefaultWorkingDirectory)/terraform/dev'
-        backendServiceArm: 'Azure-Service-Connection'
-        backendAzureRmResourceGroupName: 'terraform-state-rg'
-        backendAzureRmStorageAccountName: 'tfstatedev2024'
-        backendAzureRmContainerName: 'tfstate'
+        workingDirectory: '$(System.DefaultWorkingDirectory)/lessons/day26/dev'
+        backendServiceArm: '$(azureServiceConnection)'
+        backendAzureRmOverrideSubscriptionID: '$(subscriptionId)'
+        backendAzureRmResourceGroupName: '$(resourceGroupName)'
+        backendAzureRmStorageAccountName: 'tfdevbackend251201'
+        backendAzureRmContainerName: '$(containerName)'
         backendAzureRmKey: 'dev.terraform.tfstate'
     
     - task: TerraformTaskV4@4
+      displayName: "Terraform Validate (Dev)"
       inputs:
         provider: 'azurerm'
         command: 'validate'
-        workingDirectory: '$(System.DefaultWorkingDirectory)/terraform/dev'
+        workingDirectory: '$(System.DefaultWorkingDirectory)/lessons/day26/dev'
 
+# ============================================================
+# Stage 2 : Deploy to Dev Environment
+# ============================================================
 - stage: Dev_Deploy
+  displayName: "Terraform Apply - Dev"
+  dependsOn: Validate
   condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+
   jobs:
   - deployment: terraform_apply_dev
     environment: dev
     pool:
-      vmImage: 'ubuntu-latest'
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-          - task: TerraformInstaller@0
-            inputs:
-              terraformVersion: '1.5.7'
-          
-          - task: TerraformTaskV4@4
-            inputs:
-              provider: 'azurerm'
-              command: 'apply'
-              workingDirectory: '$(System.DefaultWorkingDirectory)/terraform/dev'
-              environmentServiceNameAzureRM: 'Azure-Service-Connection'
+      name: mySelfHostedPool
 
-- stage: Test_Deploy
-  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
-  jobs:
-  - deployment: terraform_apply_test
-    environment: test
-    pool:
-      vmImage: 'ubuntu-latest'
     strategy:
       runOnce:
         deploy:
           steps:
-          - task: TerraformInstaller@0
+          - checkout: self
+
+          - task: TerraformInstaller@1
+            displayName: "Install Terraform"
             inputs:
-              terraformVersion: '1.5.7'
+              terraformVersion: 'latest'
           
           - task: TerraformTaskV4@4
+            displayName: "Terraform Apply (Dev)"
             inputs:
               provider: 'azurerm'
               command: 'apply'
-              workingDirectory: '$(System.DefaultWorkingDirectory)/terraform/test'
-              environmentServiceNameAzureRM: 'Azure-Service-Connection'
+              workingDirectory: '$(System.DefaultWorkingDirectory)/lessons/day26/dev'
+              commandOptions: '--auto-approve'
+              environmentServiceNameAzureRM: '$(azureServiceConnection)'
+              environmentAzureRmOverrideSubscriptionID: '$(subscriptionId)'
+
+# ============================================================
+# Stage 3 : Deploy to Stage Environment
+# ============================================================
+- stage: Stage_Deploy
+  displayName: "Terraform Apply - Stage"
+  dependsOn: Dev_Deploy
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+
+  jobs:
+  - deployment: terraform_apply_stage
+    environment: stage
+    pool:
+      name: mySelfHostedPool
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+
+          - task: TerraformInstaller@1
+            displayName: "Install Terraform"
+            inputs:
+              terraformVersion: 'latest'
+          
+          - task: TerraformTaskV4@4
+            displayName: "Terraform Apply (Stage)"
+            inputs:
+              provider: 'azurerm'
+              command: 'apply'
+              workingDirectory: '$(System.DefaultWorkingDirectory)/lessons/day26/staging'
+              commandOptions: '--auto-approve'
+              environmentServiceNameAzureRM: '$(azureServiceConnection)'
+              environmentAzureRmOverrideSubscriptionID: '$(subscriptionId)'
